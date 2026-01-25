@@ -15,14 +15,21 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
           echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
-
       - name: Setup ESP32 Core
         run: |
           arduino-cli config init
-          # Gunakan URL resmi yang paling stabil
           arduino-cli config set board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
+
+      - name: List Installed Boards (Debug)
+        run: arduino-cli board listall esp32
+
+      - name: Compile Sketch
+        run: |
+          # Pastikan folder 'esp32' ada dan berisi file .ino
+          # Kita gunakan FQBN standar: esp32:esp32:esp32
+          arduino-cli compile --fqbn esp32:esp32:esp32 esp32/ --output-dir ./build_output
 
 
       - name: Compile Sketch
