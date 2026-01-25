@@ -1,7 +1,7 @@
-name: Build ESP32
+name: Build ESP32 Firmware
 
 on:
-  workflow_dispatch: # Agar bisa dijalankan manual sesuai request kamu sebelumnya
+  workflow_dispatch: # Jalankan manual dari tab Actions
 
 jobs:
   build:
@@ -15,6 +15,7 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
           echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
+
       - name: Setup ESP32 Core
         run: |
           arduino-cli config init
@@ -22,25 +23,22 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
 
-      - name: List Installed Boards (Debug)
-        run: arduino-cli board listall esp32
-
-      - name: Compile Sketch
+      - name: Install Libraries
         run: |
-          # Pastikan folder 'esp32' ada dan berisi file .ino
-          # Kita gunakan FQBN standar: esp32:esp32:esp32
-          arduino-cli compile --fqbn esp32:esp32:esp32 esp32/ --output-dir ./build_output
+          # Tambahkan library eksternal jika ada, contoh:
+          arduino-cli lib install "NimBLE-Arduino"
+          # arduino-cli lib install "GFX Library for Arduino"
+          # Jika UI kamu pakai LVGL, buka tanda pagar di bawah:
+          arduino-cli lib install "lvgl"
+          echo "Installing libraries..."
 
-
-      - name: Compile Sketch
+      - name: Compile ESP32 Sketch
         run: |
-          # Sesuaikan path ke file .ino kamu
-          # Format: arduino-cli compile --fqbn <board_manager> <path_ke_folder_ino>
-          arduino-cli compile --fqbn esp32:esp32:esp32dev esp32/ --output-dir ./build_output
+          # Perintah compile mengarah ke folder android-app/esp32
+          arduino-cli compile --fqbn esp32:esp32:esp32 android-app/esp32/ --output-dir ./build_output
 
-      - name: Upload Binary
+      - name: Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-binary
+          name: esp32-navigation-firmware
           path: ./build_output/
-          
