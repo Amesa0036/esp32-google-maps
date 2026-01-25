@@ -1,7 +1,7 @@
-name: Build ESP32 Firmware
+name: Build ESP32-C3 Google Maps
 
 on:
-  workflow_dispatch: # Jalankan manual dari tab Actions
+  workflow_dispatch:
 
 jobs:
   build:
@@ -23,22 +23,19 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install esp32:esp32
 
-      - name: Install Libraries
+      - name: Install Required Libraries
         run: |
-          # Tambahkan library eksternal jika ada, contoh:
+          # Library wajib untuk project maisonsmd
+          arduino-cli lib install "TFT_eSPI"
           arduino-cli lib install "NimBLE-Arduino"
-          # arduino-cli lib install "GFX Library for Arduino"
-          # Jika UI kamu pakai LVGL, buka tanda pagar di bawah:
-          arduino-cli lib install "lvgl"
-          echo "Installing libraries..."
 
-      - name: Compile ESP32 Sketch
+      - name: Compile for ESP32-C3
         run: |
-          # Perintah compile mengarah ke folder android-app/esp32
-          arduino-cli compile --fqbn esp32:esp32:esp32 esp32/ --output-dir ./build_output
+          # FQBN khusus untuk ESP32-C3 Dev Module
+          arduino-cli compile --fqbn esp32:esp32:esp32c3 esp32/ --output-dir ./build_output --verbose
 
-      - name: Upload Result
+      - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-navigation-firmware
+          name: esp32c3-maps-firmware
           path: ./build_output/
