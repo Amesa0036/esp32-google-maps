@@ -1,0 +1,37 @@
+name: Build ESP32
+
+on:
+  workflow_dispatch: # Agar bisa dijalankan manual sesuai request kamu sebelumnya
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
+
+      - name: Setup ESP32 Core
+        run: |
+          arduino-cli config init
+          arduino-cli config set board_manager.additional_urls https://espressif.github.io/resource/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Compile Sketch
+        run: |
+          # Sesuaikan path ke file .ino kamu
+          # Format: arduino-cli compile --fqbn <board_manager> <path_ke_folder_ino>
+          arduino-cli compile --fqbn esp32:esp32:esp32dev esp32/ --output-dir ./build_output
+
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-binary
+          path: ./build_output/
+          
