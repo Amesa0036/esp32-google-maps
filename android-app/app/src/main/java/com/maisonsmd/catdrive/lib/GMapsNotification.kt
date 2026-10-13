@@ -1,29 +1,19 @@
 package com.maisonsmd.catdrive.lib
 
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.content.ContentUris
-import android.content.ContentValues
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
-import android.os.Build
-import android.os.Environment
-import android.os.SystemClock
-import android.provider.MediaStore
 import android.service.notification.StatusBarNotification
 import android.text.Spanned
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.Button
 import android.widget.ImageView
 import android.widget.RemoteViews
 import android.widget.TextView
-import androidx.core.app.NotificationCompat
 import androidx.core.view.children
-import java.io.File
-import org.json.JSONArray
 import org.json.JSONObject
 import timber.log.Timber
 
@@ -36,13 +26,7 @@ enum class ContentViewType {
 }
 
 internal class GMapsNotification(cx: Context, sbn: StatusBarNotification) : NavigationNotification(cx, sbn) {
-    companion object {
-        private var lastDumpAt = -10_000L
-    }
-
     init {
-        dumpNotificationViews()
-
         val normalContent = getContentView(ContentViewType.NORMAL)
         if (normalContent != null)
             parseRemoteView(getRemoteViewGroup(normalContent))
@@ -121,10 +105,17 @@ internal class GMapsNotification(cx: Context, sbn: StatusBarNotification) : Navi
 
         // parse ETE & ETA
         if (etaText != null) {
-            val etaList = etaText.text.split("·")
+            val etaStr = etaText.text.toString()
+            val etaList = etaStr.split("·")
             if (etaList.size == 3) {
                 val distance = etaList[1].trim()
                 data.eta = NavigationEta(etaList[2].removeSuffix("ETA").trim(), etaList[0].trim(), distance)
+            } else {
+                // Maps reciente: "Llegada: 5:47 p. m." (solo la hora de llegada)
+                val idx = etaStr.indexOf(':')
+                if (idx >= 0 && idx + 1 < etaStr.length) {
+                    data.eta = NavigationEta(etaStr.substring(idx + 1).trim(), "", "")
+                }
             }
         }
 
@@ -168,124 +159,40 @@ internal class GMapsNotification(cx: Context, sbn: StatusBarNotification) : Navi
         return data
     }
 
-    // Diagnostic only: never let a dump failure affect navigation parsing.
-    private fun dumpNotificationViews() {
-        synchronized(GMapsNotification::class.java) {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastDumpAt < 10_000L) return
-            lastDumpAt = now
+    // for debugging
+    private fun parseRemoteViewToJson(group: ViewGroup, json: JSONObject? = null): JSONObject {
+        var rawJson = json ?: JSONObject()
+
+        val parentGroupKey = getEntryJsonKey(group)
+        rawJson.apply {
+            put(parentGroupKey, JSONObject())
         }
 
-        val result = try {
-            val dump = JSONObject().apply {
-                put("capturedAt", java.util.Date().toString())
-                put("boundsNote", "Bounds are relative to the parent; unlaid-out views may have zero bounds.")
-                for (type in listOf(ContentViewType.BIG, ContentViewType.NORMAL)) {
-                    val tree = try {
-                        val remoteViews = getContentView(type)
-                        if (remoteViews == null) JSONObject().put("unavailable", true)
-                        else parseRemoteViewToJson(getRemoteViewGroup(remoteViews))
-                    } catch (e: Exception) {
-                        JSONObject().put("error", e.toString())
+        for (child in group.children) {
+            val entryName = getEntryName(child)
+            when (child) {
+                is ImageView -> {
+                    rawJson.getJSONObject(parentGroupKey).apply { put(getEntryJsonKey(child), entryName) }
+                }
+                is Button -> {
+                    // result.getJSONObject(parentGroupKey).apply { put(getEntryJsonKey(child), child.text) }
+                }
+                is TextView -> {
+                    rawJson.getJSONObject(parentGroupKey).apply {
+                        put(getEntryJsonKey(child), JSONObject().apply {
+                            put(
+                                "rawText",
+                                child.text
+                            )
+                        })
                     }
-                    put(type.name, tree)
+                }
+                is ViewGroup -> {
+                    rawJson = parseRemoteViewToJson(child, rawJson)
                 }
             }
-
-            val json = dump.toString(2)
-            try {
-                val resolver = mContext.contentResolver
-                val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                val path = Environment.DIRECTORY_DOWNLOADS + "/"
-                var uri: android.net.Uri? = null
-                val existing = resolver.query(
-                    collection, arrayOf(MediaStore.Downloads._ID),
-                    "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ? AND ${MediaStore.Downloads.OWNER_PACKAGE_NAME} = ?",
-                    arrayOf("catdrive-views.txt", path, mContext.packageName), null
-                ) ?: throw java.io.IOException("Cannot query Downloads")
-                existing.use { cursor ->
-                    if (cursor.moveToFirst())
-                        uri = ContentUris.withAppendedId(collection, cursor.getLong(0))
-                }
-                val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, "catdrive-views.txt")
-                    put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-                    put(MediaStore.Downloads.RELATIVE_PATH, path)
-                    put(MediaStore.Downloads.IS_PENDING, 1)
-                }
-                val target = uri ?: resolver.insert(collection, values)
-                    ?: throw java.io.IOException("Cannot create catdrive-views.txt")
-                resolver.update(target, values, null, null)
-                try {
-                    val stream = resolver.openOutputStream(target, "wt")
-                        ?: throw java.io.IOException("Cannot open catdrive-views.txt")
-                    stream.bufferedWriter(Charsets.UTF_8).use { it.write(json) }
-                } finally {
-                    resolver.update(target, ContentValues().apply {
-                        put(MediaStore.Downloads.IS_PENDING, 0)
-                    }, null, null)
-                }
-                "CatDrive diagnostico: guardado en Descargas"
-            } catch (e: Exception) {
-                Timber.w(e, "Cannot save diagnostic in Downloads; trying app files")
-                val directory = mContext.getExternalFilesDir(null)
-                    ?: throw java.io.IOException("External files directory unavailable", e)
-                File(directory, "catdrive-views.txt").writeText(json, Charsets.UTF_8)
-                "CatDrive diagnostico: guardado en Android/data/${mContext.packageName}/files"
-            }
-        } catch (e: Exception) {
-            Timber.w(e, "Cannot save notification view diagnostic")
-            "CatDrive diagnostico ERROR: ${e.message ?: e.toString()}"
         }
 
-        // The same 10-second gate above covers both the dump and its notification.
-        try {
-            val manager = mContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                manager.createNotificationChannel(NotificationChannel(
-                    "diagnostico", "Diagnostico CatDrive", NotificationManager.IMPORTANCE_DEFAULT
-                ))
-            }
-            val notification = NotificationCompat.Builder(mContext, "diagnostico")
-                .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle("CatDrive diagnostico")
-                .setContentText(result)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(result))
-                .setOnlyAlertOnce(true)
-                .build()
-            manager.notify(42, notification)
-        } catch (e: Exception) {
-            Timber.w(e, "Cannot show notification view diagnostic result")
-        }
-    }
-
-    // An array preserves every child, even when several have the same id/class.
-    private fun parseRemoteViewToJson(view: View): JSONObject {
-        return JSONObject().apply {
-            put("key", getEntryJsonKey(view))
-            put("id", view.id)
-            put("entryName", getEntryName(view))
-            put("class", view.javaClass.name)
-            put("text", if (view is TextView) view.text?.toString() ?: "" else JSONObject.NULL)
-            put("contentDescription", view.contentDescription?.toString() ?: JSONObject.NULL)
-            put("visibility", when (view.visibility) {
-                View.VISIBLE -> "VISIBLE"
-                View.INVISIBLE -> "INVISIBLE"
-                View.GONE -> "GONE"
-                else -> view.visibility.toString()
-            })
-            put("isLaidOut", view.isLaidOut)
-            put("bounds", JSONObject().apply {
-                put("left", view.left)
-                put("top", view.top)
-                put("right", view.right)
-                put("bottom", view.bottom)
-            })
-            if (view is ViewGroup) {
-                put("children", JSONArray().apply {
-                    for (child in view.children) put(parseRemoteViewToJson(child))
-                })
-            }
-        }
+        return rawJson
     }
 }
