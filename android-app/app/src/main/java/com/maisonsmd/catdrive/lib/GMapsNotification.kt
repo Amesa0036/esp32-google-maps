@@ -1,12 +1,14 @@
-
 package com.maisonsmd.catdrive.lib
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
+import android.os.Build
 import android.os.Environment
 import android.os.SystemClock
 import android.provider.MediaStore
@@ -18,7 +20,9 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.RemoteViews
 import android.widget.TextView
+import androidx.core.app.NotificationCompat
 import androidx.core.view.children
+import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 import timber.log.Timber
@@ -172,7 +176,7 @@ internal class GMapsNotification(cx: Context, sbn: StatusBarNotification) : Navi
             lastDumpAt = now
         }
 
-        try {
+        val result = try {
             val dump = JSONObject().apply {
                 put("capturedAt", java.util.Date().toString())
                 put("boundsNote", "Bounds are relative to the parent; unlaid-out views may have zero bounds.")
@@ -188,39 +192,70 @@ internal class GMapsNotification(cx: Context, sbn: StatusBarNotification) : Navi
                 }
             }
 
-            val resolver = mContext.contentResolver
-            val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-            val path = Environment.DIRECTORY_DOWNLOADS + "/"
-            var uri: android.net.Uri? = null
-            val existing = resolver.query(
-                collection, arrayOf(MediaStore.Downloads._ID),
-                "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ? AND ${MediaStore.Downloads.OWNER_PACKAGE_NAME} = ?",
-                arrayOf("catdrive-views.txt", path, mContext.packageName), null
-            ) ?: throw java.io.IOException("Cannot query Downloads")
-            existing.use { cursor ->
-                if (cursor.moveToFirst())
-                    uri = ContentUris.withAppendedId(collection, cursor.getLong(0))
-            }
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, "catdrive-views.txt")
-                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-                put(MediaStore.Downloads.RELATIVE_PATH, path)
-                put(MediaStore.Downloads.IS_PENDING, 1)
-            }
-            val target = uri ?: resolver.insert(collection, values)
-                ?: throw java.io.IOException("Cannot create catdrive-views.txt")
-            resolver.update(target, values, null, null)
+            val json = dump.toString(2)
             try {
-                val stream = resolver.openOutputStream(target, "wt")
-                    ?: throw java.io.IOException("Cannot open catdrive-views.txt")
-                stream.bufferedWriter(Charsets.UTF_8).use { it.write(dump.toString(2)) }
-            } finally {
-                resolver.update(target, ContentValues().apply {
-                    put(MediaStore.Downloads.IS_PENDING, 0)
-                }, null, null)
+                val resolver = mContext.contentResolver
+                val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                val path = Environment.DIRECTORY_DOWNLOADS + "/"
+                var uri: android.net.Uri? = null
+                val existing = resolver.query(
+                    collection, arrayOf(MediaStore.Downloads._ID),
+                    "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ? AND ${MediaStore.Downloads.OWNER_PACKAGE_NAME} = ?",
+                    arrayOf("catdrive-views.txt", path, mContext.packageName), null
+                ) ?: throw java.io.IOException("Cannot query Downloads")
+                existing.use { cursor ->
+                    if (cursor.moveToFirst())
+                        uri = ContentUris.withAppendedId(collection, cursor.getLong(0))
+                }
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, "catdrive-views.txt")
+                    put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                    put(MediaStore.Downloads.RELATIVE_PATH, path)
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val target = uri ?: resolver.insert(collection, values)
+                    ?: throw java.io.IOException("Cannot create catdrive-views.txt")
+                resolver.update(target, values, null, null)
+                try {
+                    val stream = resolver.openOutputStream(target, "wt")
+                        ?: throw java.io.IOException("Cannot open catdrive-views.txt")
+                    stream.bufferedWriter(Charsets.UTF_8).use { it.write(json) }
+                } finally {
+                    resolver.update(target, ContentValues().apply {
+                        put(MediaStore.Downloads.IS_PENDING, 0)
+                    }, null, null)
+                }
+                "CatDrive diagnostico: guardado en Descargas"
+            } catch (e: Exception) {
+                Timber.w(e, "Cannot save diagnostic in Downloads; trying app files")
+                val directory = mContext.getExternalFilesDir(null)
+                    ?: throw java.io.IOException("External files directory unavailable", e)
+                File(directory, "catdrive-views.txt").writeText(json, Charsets.UTF_8)
+                "CatDrive diagnostico: guardado en Android/data/${mContext.packageName}/files"
             }
         } catch (e: Exception) {
             Timber.w(e, "Cannot save notification view diagnostic")
+            "CatDrive diagnostico ERROR: ${e.message ?: e.toString()}"
+        }
+
+        // The same 10-second gate above covers both the dump and its notification.
+        try {
+            val manager = mContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                manager.createNotificationChannel(NotificationChannel(
+                    "diagnostico", "Diagnostico CatDrive", NotificationManager.IMPORTANCE_DEFAULT
+                ))
+            }
+            val notification = NotificationCompat.Builder(mContext, "diagnostico")
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentTitle("CatDrive diagnostico")
+                .setContentText(result)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(result))
+                .setOnlyAlertOnce(true)
+                .build()
+            manager.notify(42, notification)
+        } catch (e: Exception) {
+            Timber.w(e, "Cannot show notification view diagnostic result")
         }
     }
 
@@ -254,4 +289,3 @@ internal class GMapsNotification(cx: Context, sbn: StatusBarNotification) : Navi
         }
     }
 }
-
